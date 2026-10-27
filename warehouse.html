@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>walrusroom : warehouse</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; overflow: hidden; background: #050201; }
+  canvas { display: block; }
+  
+  #mobile-block {
+    display: none;
+    position: fixed; inset: 0; z-index: 100;
+    background: #050201; color: #ff3333;
+    flex-direction: column; align-items: center; justify-content: center;
+    text-align: center; padding: 2rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  }
+  @media (max-width: 1024px), (pointer: coarse) {
+    #mobile-block { display: flex; }
+    #overlay { display: none !important; }
+    canvas { display: none !important; }
+  }
+
+  #overlay {
+    position: fixed; inset: 0; z-index: 10; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 22px;
+    background: #050201; color: #ffd9ec; text-align: center; cursor: pointer; font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; transition: opacity .45s ease;
+  }
+  #overlay.hidden { opacity: 0; pointer-events: none; }
+  #overlay .intro { font-size: clamp(1.15rem, 2.4vw, 1.6rem); font-weight: 500; letter-spacing: .02em; opacity: .95; }
+  #overlay .hint { font-size: .82rem; opacity: .6; letter-spacing: .12em; text-transform: uppercase; max-width: 36rem; line-height: 2.1; }
+  #crosshair {
+    position: fixed; left: 50%; top: 50%; z-index: 5; width: 18px; height: 18px; margin: -9px 0 0 -9px; background: #ff6fb5;
+    clip-path: polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%);
+    filter: drop-shadow(0 0 5px rgba(255,111,181,0.95)) drop-shadow(0 0 12px rgba(255,111,181,0.5));
+    pointer-events: none; opacity: 0; transition: opacity .3s;
+  }
+  #crosshair.on { opacity: 1; animation: crosshair-pulse 2.4s ease-in-out infinite; }
+  @keyframes crosshair-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.12); } }
+</style>
+</head>
+<body>
+
+<div id="mobile-block">
+  <h1 style="margin-bottom: 20px; font-size: 1.5rem; letter-spacing: 0.1em;">DESKTOP ONLY</h1>
+  <p style="opacity: 0.7; line-height: 1.6; max-width: 300px;">
+    This is an immersive 3D installation. <br><br>
+    Please visit this site on a desktop or laptop computer to enter.
+  </p>
+</div>
+
+<div id="crosshair"></div>
+<div id="overlay">
+  <p class="intro">Click anywhere to enter</p>
+  <p class="hint">WASD move &middot; Shift run &middot; Mouse look &middot; M music &middot; Esc release</p>
+</div>
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.module.js", "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.184.0/examples/jsm/" } }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
+
+/* =========================================================
+   ⚙️  CONFIG
+   ========================================================= */
+const MUSIC_URL = 'https://archive.org/download/the-sound-of-damnation/The%20Sound%20of%20Damnation.mp3';
+const VIDEO_URL = 'warehouse_web.mp4';
+
+// 💡 11 Easels targeting w001.jpg to w011.jpg
+const ART_DIR   = '_resized/';
+const ART_FILES = Array.from({ length: 11 }, (_, i) => `w${String(i + 1).padStart(3, '0')}.jpg`);
+
+const renderer = new THREE.WebGLRenderer({ antialias: false });
+renderer.setPixelRatio(1); renderer.setSize(window.innerWidth, window.innerHeight); document.body.appendChild(renderer.domElement);
+const scene = new THREE.Scene(); scene.fog = new THREE.FogExp2(0x4a0a0a, 0.004);
+const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 400); camera.rotation.order = 'YXZ';
+
+function makeTex(w, h, drawFn, repeatX = 1, repeatY = 1) {
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  const ctx = c.getContext('2d'); drawFn(ctx, w, h);
+  const tex = new THREE.CanvasTexture(c); tex.magFilter = THREE.NearestFilter; tex.minFilter = THREE.NearestFilter;
+  tex.colorSpace = THREE.SRGBColorSpace; tex.wrapS = THREE.RepeatWrapping; tex.wrapT = THREE.RepeatWrapping; tex.repeat.set(repeatX, repeatY); return tex;
+}
+
+const floorTex = makeTex(256, 256, (ctx, w, h) => {
+  ctx.fillStyle = '#6a1515'; ctx.fillRect(0, 0, w, h);
+  for (let i = 0; i < 5000; i++) { ctx.fillStyle = Math.random() > 0.5 ? '#7a1a1a' : '#4a0e0e'; ctx.fillRect(Math.random() * w, Math.random() * h, Math.random() * 4, Math.random() * 4); }
+  ctx.strokeStyle = '#2a0505'; ctx.lineWidth = 2;
+  for (let i = 0; i <= w; i += 64) { ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, h); ctx.stroke(); ctx.beginPath(); ctx.moveTo(0, i); ctx.lineTo(w, i); ctx.stroke(); }
+}, 10, 30);
+
+const wallTex = makeTex(256, 256, (ctx, w, h) => {
+  ctx.fillStyle = '#7e1a1a'; ctx.fillRect(0, 0, w, h);
+  for (let i = 0; i < 3000; i++) { ctx.fillStyle = Math.random() > 0.5 ? '#8e2020' : '#5a1010'; ctx.fillRect(Math.random() * w, Math.random() * h, Math.random() * 3, Math.random() * 3); }
+  ctx.fillStyle = '#2a0505';
+  for (let x = 32; x < w; x += 64) { for (let y = 32; y < h; y += 64) { ctx.beginPath(); ctx.arc(x, y, 4, 0, Math.PI * 2); ctx.fill(); } }
+}, 6, 5);
+
+const ceilTex = makeTex(256, 256, (ctx, w, h) => {
+  ctx.fillStyle = '#4a0e0e'; ctx.fillRect(0, 0, w, h); ctx.strokeStyle = '#6a1515'; ctx.lineWidth = 4;
+  for (let i = 0; i <= w; i += 32) { ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, h); ctx.stroke(); }
+  for (let i = 0; i <= h; i += 32) { ctx.beginPath(); ctx.moveTo(0, i); ctx.lineTo(w, i); ctx.stroke(); }
+}, 8, 24);
+
+const ROOM_WIDTH  = 40; const ROOM_LENGTH = 120; const ROOM_HEIGHT = 24; const HALF_W = ROOM_WIDTH / 2; const HALF_L = ROOM_LENGTH / 2;
+const wallMat  = new THREE.MeshLambertMaterial({ map: wallTex });
+const floorMat = new THREE.MeshLambertMaterial({ map: floorTex });
+const ceilMat  = new THREE.MeshLambertMaterial({ map: ceilTex });
+const blackMat = new THREE.MeshLambertMaterial({ color: 0x1a1a1a });
+const metalMat = new THREE.MeshLambertMaterial({ color: 0x333333 });
+const darkTunnelMat = new THREE.MeshLambertMaterial({ color: 0x0a0508 });
+
+const floor = new THREE.Mesh(new THREE.PlaneGeometry(ROOM_WIDTH, ROOM_LENGTH), floorMat); floor.rotation.x = -Math.PI / 2; scene.add(floor);
+const ceiling = new THREE.Mesh(new THREE.PlaneGeometry(ROOM_WIDTH, ROOM_LENGTH), ceilMat); ceiling.rotation.x = Math.PI / 2; ceiling.position.y = ROOM_HEIGHT; scene.add(ceiling);
+const leftWall = new THREE.Mesh(new THREE.BoxGeometry(1, ROOM_HEIGHT, ROOM_LENGTH), wallMat); leftWall.position.set(-HALF_W, ROOM_HEIGHT / 2, 0); scene.add(leftWall);
+const rightWall = leftWall.clone(); rightWall.position.x = HALF_W; scene.add(rightWall);
+const farWall = new THREE.Mesh(new THREE.BoxGeometry(ROOM_WIDTH, ROOM_HEIGHT, 1), wallMat); farWall.position.set(0, ROOM_HEIGHT / 2, -HALF_L); scene.add(farWall);
+
+const TUNNEL_WIDTH = 6; const TUNNEL_HEIGHT = 12; const TUNNEL_LENGTH = 40;
+const tunnelStartZ = HALF_L; const tunnelCenterZ = tunnelStartZ + TUNNEL_LENGTH / 2;
+const wallPieceW = (ROOM_WIDTH - TUNNEL_WIDTH) / 2;
+const entWallLeft = new THREE.Mesh(new THREE.BoxGeometry(wallPieceW, ROOM_HEIGHT, 1), wallMat); entWallLeft.position.set(-(TUNNEL_WIDTH/2 + wallPieceW/2), ROOM_HEIGHT/2, tunnelStartZ); scene.add(entWallLeft);
+const entWallRight = new THREE.Mesh(new THREE.BoxGeometry(wallPieceW, ROOM_HEIGHT, 1), wallMat); entWallRight.position.set(TUNNEL_WIDTH/2 + wallPieceW/2, ROOM_HEIGHT/2, tunnelStartZ); scene.add(entWallRight);
+const entWallTop = new THREE.Mesh(new THREE.BoxGeometry(TUNNEL_WIDTH, ROOM_HEIGHT - TUNNEL_HEIGHT, 1), wallMat); entWallTop.position.set(0, TUNNEL_HEIGHT + (ROOM_HEIGHT - TUNNEL_HEIGHT)/2, tunnelStartZ); scene.add(entWallTop);
+
+const tFloor = new THREE.Mesh(new THREE.PlaneGeometry(TUNNEL_WIDTH, TUNNEL_LENGTH), darkTunnelMat); tFloor.rotation.x = -Math.PI / 2; tFloor.position.set(0, 0, tunnelCenterZ); scene.add(tFloor);
+const tCeil = new THREE.Mesh(new THREE.PlaneGeometry(TUNNEL_WIDTH, TUNNEL_LENGTH), darkTunnelMat); tCeil.rotation.x = Math.PI / 2; tCeil.position.set(0, TUNNEL_HEIGHT, tunnelCenterZ); scene.add(tCeil);
+const tLeft = new THREE.Mesh(new THREE.BoxGeometry(0.5, TUNNEL_HEIGHT, TUNNEL_LENGTH), darkTunnelMat); tLeft.position.set(-TUNNEL_WIDTH/2, TUNNEL_HEIGHT/2, tunnelCenterZ); scene.add(tLeft);
+const tRight = new THREE.Mesh(new THREE.BoxGeometry(0.5, TUNNEL_HEIGHT, TUNNEL_LENGTH), darkTunnelMat); tRight.position.set(TUNNEL_WIDTH/2, TUNNEL_HEIGHT/2, tunnelCenterZ); scene.add(tRight);
+
+const exitLight = new THREE.PointLight(0xff0000, 5, 20); exitLight.position.set(0, TUNNEL_HEIGHT/2, tunnelStartZ + TUNNEL_LENGTH - 2); scene.add(exitLight);
+
+/* =========================================================
+   THE VIDEO SCREEN (No Frame, exact wall size)
+   ========================================================= */
+const videoEl = document.createElement('video');
+videoEl.src = VIDEO_URL; videoEl.loop = true; videoEl.muted = true; videoEl.crossOrigin = 'anonymous'; videoEl.playsInline = true; videoEl.preload = 'auto'; 
+
+const videoTex = new THREE.VideoTexture(videoEl); videoTex.minFilter = THREE.LinearFilter; videoTex.magFilter = THREE.LinearFilter; videoTex.colorSpace = THREE.SRGBColorSpace;
+
+const screenGeo = new THREE.PlaneGeometry(ROOM_WIDTH, ROOM_HEIGHT); 
+const screenMat = new THREE.MeshBasicMaterial({ map: videoTex, color: 0xffffff }); 
+const screenMesh = new THREE.Mesh(screenGeo, screenMat); 
+screenMesh.position.set(0, ROOM_HEIGHT / 2, -HALF_L + 0.55); 
+scene.add(screenMesh);
+
+let videoInitialized = false;
+
+videoEl.addEventListener('loadedmetadata', () => {
+  if (!videoInitialized && videoEl.duration > 0) {
+      videoEl.currentTime = Math.random() * (videoEl.duration - 5);
+      videoInitialized = true;
+  }
+});
+
+const screenLight = new THREE.PointLight(0xff4444, 30, 200); 
+screenLight.position.set(0, screenMesh.position.y, -HALF_L + 4); 
+scene.add(screenLight);
+
+/* =========================================================
+   THE BLACK COUCH (Scaled up to fill the empty space)
+   ========================================================= */
+const couchGroup = new THREE.Group(); 
+couchGroup.position.set(0, 0, -25); 
+couchGroup.scale.set(1.5, 1.5, 1.5); 
+
+const couchBase = new THREE.Mesh(new THREE.BoxGeometry(10, 1.2, 4), blackMat); couchBase.position.y = 0.6; couchGroup.add(couchBase);
+const couchBack = new THREE.Mesh(new THREE.BoxGeometry(10, 2.5, 1), blackMat); couchBack.position.set(0, 1.8, 1.5); couchGroup.add(couchBack);
+const armL = new THREE.Mesh(new THREE.BoxGeometry(1.2, 2, 4), blackMat); armL.position.set(-4.4, 1.0, 0); couchGroup.add(armL);
+const armR = armL.clone(); armR.position.x = 4.4; couchGroup.add(armR);
+const cushionL = new THREE.Mesh(new THREE.BoxGeometry(4.2, 0.4, 3.6), blackMat); cushionL.position.set(-2.2, 1.4, -0.1); couchGroup.add(cushionL);
+const cushionR = cushionL.clone(); cushionR.position.x = 2.2; couchGroup.add(cushionR);
+scene.add(couchGroup);
+
+/* =========================================================
+   11 EASELS & ARTWORK
+   ========================================================= */
+const easelMat = new THREE.MeshLambertMaterial({ color: 0x1a1a1a });
+const unitPaintingGeo = new THREE.PlaneGeometry(1, 1); const MAX_PAINT_W = 4.0; const MAX_PAINT_H = 5.0;
+const imgLoader = new THREE.ImageLoader(); imgLoader.setCrossOrigin('anonymous');
+
+function imageToTexture(img) {
+  const scale = Math.min(1, 512 / Math.max(img.width, img.height));
+  const w = Math.max(1, Math.round(img.width * scale)); const h = Math.max(1, Math.round(img.height * scale));
+  const c = document.createElement('canvas'); c.width = w; c.height = h; c.getContext('2d').drawImage(img, 0, 0, w, h);
+  const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace; return tex;
+}
+function fitPainting(mesh, imgW, imgH) {
+  const aspect = imgW / imgH; const boxAspect = MAX_PAINT_W / MAX_PAINT_H; let w, h;
+  if (aspect > boxAspect) { w = MAX_PAINT_W; h = MAX_PAINT_W / aspect; } else { h = MAX_PAINT_H; w = MAX_PAINT_H * aspect; }
+  mesh.scale.set(w, h, 1); mesh.position.y = 2.0 + h / 2;
+}
+function createEasel() {
+  const group = new THREE.Group();
+  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 7, 4), easelMat); pole.position.y = 3.5; group.add(pole);
+  const backLeg = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 7, 4), easelMat); backLeg.position.set(0, 3.5, -1.0); backLeg.rotation.x = 0.3; group.add(backLeg);
+  const leftLeg = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 7, 4), easelMat); leftLeg.position.set(-1.0, 3.5, 0.5); leftLeg.rotation.z = 0.25; leftLeg.rotation.x = -0.1; group.add(leftLeg);
+  const rightLeg = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 7, 4), easelMat); rightLeg.position.set(1.0, 3.5, 0.5); rightLeg.rotation.z = -0.25; rightLeg.rotation.x = -0.1; group.add(rightLeg);
+  const shelf = new THREE.Mesh(new THREE.BoxGeometry(4.8, 0.2, 1.4), easelMat); shelf.position.set(0, 2.0, 0.6); group.add(shelf);
+  return group;
+}
+
+// Placement Logic: 6 on left, 5 on right, staggered spacing
+const Z_START_LEFT = 40;
+const Z_START_RIGHT = 34;
+const Z_SPACING = 12.0;
+
+for (let i = 0; i < ART_FILES.length; i++) {
+  const isLeft = i % 2 === 0; 
+  const rowIndex = Math.floor(i / 2);
+  
+  const xPos = isLeft ? -HALF_W + 4.0 : HALF_W - 4.0; 
+  const zPos = isLeft ? (Z_START_LEFT - rowIndex * Z_SPACING) : (Z_START_RIGHT - rowIndex * Z_SPACING);
+  
+  const easel = createEasel(); 
+  easel.position.set(xPos, 0, zPos); 
+  easel.rotation.y = isLeft ? Math.PI / 2 : -Math.PI / 2; 
+  scene.add(easel);
+  
+  const mat = new THREE.MeshBasicMaterial({ color: 0x222222 }); 
+  const mesh = new THREE.Mesh(unitPaintingGeo, mat); 
+  mesh.rotation.y = isLeft ? Math.PI / 2 : -Math.PI / 2;
+  
+  const forwardOffset = isLeft ? 0.7 : -0.7; 
+  mesh.position.set(xPos + forwardOffset, 2.0, zPos); 
+  scene.add(mesh);
+  
+  // Add a spotlight for every easel
+  const pLight = new THREE.PointLight(0xffdddd, 8, 25); 
+  pLight.position.set(xPos + (isLeft ? 3 : -3), 8, zPos); 
+  scene.add(pLight);
+
+  imgLoader.load(ART_DIR + ART_FILES[i], (img) => { 
+      const tex = imageToTexture(img); 
+      mat.map = tex; 
+      mat.color.setRGB(1, 1, 1); 
+      mat.needsUpdate = true; 
+      fitPainting(mesh, img.width, img.height); 
+  });
+}
+
+/* =========================================================
+   CEILING LIGHTS & AMBIENT
+   ========================================================= */
+const hangingLights = [];
+for (let z = -50; z <= 50; z += 20) {
+  const fixture = new THREE.Group(); fixture.position.set(0, ROOM_HEIGHT, z);
+  const wire = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 4), metalMat); wire.position.y = -2; fixture.add(wire);
+  const shade = new THREE.Mesh(new THREE.ConeGeometry(2, 1, 8), metalMat); shade.position.y = -4; shade.rotation.x = Math.PI; fixture.add(shade);
+  const bulbMat = new THREE.MeshBasicMaterial({ color: 0xffffff }); const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.4, 8, 8), bulbMat); bulb.position.y = -4.5; fixture.add(bulb);
+  const light = new THREE.PointLight(0xffbbbb, 15, 120); light.position.y = -4.5; fixture.add(light);
+  scene.add(fixture); hangingLights.push({ light, bulbMat, baseIntensity: 15, seed: Math.random() * 100 });
+}
+const ambient = new THREE.AmbientLight(0xaa3333, 4.0); scene.add(ambient);
+
+/* =========================================================
+   FIRST-PERSON CONTROLS & MUSIC
+   ========================================================= */
+const overlay = document.getElementById('overlay'); const crosshair = document.getElementById('crosshair');
+const controls = new PointerLockControls(camera, renderer.domElement);
+let musicEl = null; let isTransitioning = false;
+
+function startMusic() {
+  if (MUSIC_URL) {
+    if (musicEl) { 
+      musicEl.play().catch(() => {}); 
+      return; 
+    }
+    
+    musicEl = new Audio(MUSIC_URL);
+    musicEl.volume = 0.55; 
+    
+    musicEl.addEventListener('loadedmetadata', () => {
+      const randomTime = Math.random() * (musicEl.duration - 5); 
+      musicEl.currentTime = randomTime;
+      
+      const playWhenReady = () => {
+        musicEl.play().then(() => {
+            console.log("✅ Music started successfully!");
+        }).catch((err) => {
+          console.warn("Browser blocked autoplay.", err);
+        });
+      };
+      
+      musicEl.addEventListener('seeked', playWhenReady, { once: true });
+      setTimeout(() => {
+        if (musicEl.paused) playWhenReady();
+      }, 800);
+    }, { once: true });
+
+    musicEl.addEventListener('ended', () => {
+      musicEl.currentTime = 0;
+      musicEl.play().catch(() => {});
+    });
+  }
+}
+
+function toggleMusic() { if (musicEl) { musicEl.muted = !musicEl.muted; } }
+
+overlay.addEventListener('click', () => controls.lock());
+controls.addEventListener('lock', () => {
+  overlay.classList.add('hidden'); crosshair.classList.add('on');
+  videoEl.play().then(() => console.log("✅ Video started!")).catch(e => console.error(e));
+  startMusic();
+});
+controls.addEventListener('unlock', () => {
+  if (!isTransitioning) { overlay.classList.remove('hidden'); crosshair.classList.remove('on'); }
+  if (!videoEl.paused) videoEl.pause(); 
+  if (musicEl && !musicEl.paused) musicEl.pause();
+});
+
+const keys = Object.create(null);
+addEventListener('keydown', (e) => { 
+    keys[e.code] = true; 
+    if (e.repeat) return; 
+    if (e.code === 'KeyM') toggleMusic(); 
+});
+addEventListener('keyup', (e) => { keys[e.code] = false; });
+
+const EYE_HEIGHT  = 3.0; const WALK_SPEED  = 10; const RUN_SPEED   = 20;
+const velocity = new THREE.Vector3(); const forward  = new THREE.Vector3(); const rightVec = new THREE.Vector3(); const wish     = new THREE.Vector3(); const UP       = new THREE.Vector3(0, 1, 0);
+camera.position.set(0, EYE_HEIGHT, HALF_L - 5); camera.rotation.y = 0;
+
+function updatePlayer(dt) {
+  if (isTransitioning) return;
+  const speed = (keys.ShiftLeft || keys.ShiftRight) ? RUN_SPEED : WALK_SPEED;
+  camera.getWorldDirection(forward); forward.y = 0;
+  if (forward.lengthSq() < 1e-6) forward.set(0, 0, -1); forward.normalize(); rightVec.crossVectors(forward, UP).normalize();
+  wish.set(0, 0, 0);
+  if (keys.KeyW || keys.ArrowUp)    wish.add(forward);
+  if (keys.KeyS || keys.ArrowDown)  wish.sub(forward);
+  if (keys.KeyD || keys.ArrowRight) wish.add(rightVec);
+  if (keys.KeyA || keys.ArrowLeft)  wish.sub(rightVec);
+  if (wish.lengthSq() > 0) wish.normalize().multiplyScalar(speed);
+  velocity.lerp(wish, 1 - Math.exp(-10 * dt)); camera.position.addScaledVector(velocity, dt);
+
+  let limitX = HALF_W - 2; let limitZMax = HALF_L + TUNNEL_LENGTH - 2; let limitZMin = -HALF_L + 2;
+  if (camera.position.z > HALF_L - 1) { limitX = (TUNNEL_WIDTH / 2) - 1; }
+  camera.position.x = Math.max(-limitX, Math.min(limitX, camera.position.x));
+  camera.position.z = Math.max(limitZMin, Math.min(limitZMax, camera.position.z));
+  camera.position.y = EYE_HEIGHT;
+
+  if (camera.position.z > HALF_L + TUNNEL_LENGTH - 4) {
+      isTransitioning = true; controls.unlock();
+      const overlay = document.getElementById('overlay');
+      overlay.style.opacity = '1'; overlay.classList.remove('hidden');
+      overlay.querySelector('.intro').innerText = "Returning to the hallway...";
+      overlay.querySelector('.hint').innerText = ""; crosshair.classList.remove('on');
+      setTimeout(() => { window.location.href = 'index.html'; }, 1000);
+  }
+}
+
+let worldTime = 0;
+function updateAtmosphere() {
+  hangingLights.forEach((h) => {
+    const flicker = Math.sin(worldTime * 15 + h.seed) > 0.95 ? 0.4 : 1.0;
+    const breathing = 0.9 + 0.1 * Math.sin(worldTime * 2 + h.seed);
+    h.light.intensity = h.baseIntensity * flicker * breathing; h.bulbMat.color.setHex(flicker < 0.5 ? 0xaa0000 : 0xffffff);
+  });
+  screenLight.intensity = 30.0 + Math.sin(worldTime * 4) * 5.0;
+}
+
+addEventListener('resize', () => { camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight); });
+const clock = new THREE.Clock();
+function animate() {
+  requestAnimationFrame(animate); const dt = Math.min(clock.getDelta(), 0.05); worldTime += dt;
+  if (controls.isLocked) updatePlayer(dt); else velocity.multiplyScalar(1 - Math.min(1, 8 * dt));
+  updateAtmosphere(); renderer.render(scene, camera);
+}
+animate();
+</script>
+</body>
+</html>
